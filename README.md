@@ -2,37 +2,62 @@
 
 Go Vanity URLs is a simple Go server that allows you
 to set custom import paths for your Go packages.
-It also can run on Google App Engine.
+It also can run on Google App Engine and Google Cloud Run.
 
 ## Quickstart
 
-Install and run the binary:
+1. Download the source code:
 
 ```
-$ go get -u github.com/GoogleCloudPlatform/govanityurls
-$ # update vanity.yaml
-$ govanityurls
-$ # open http://localhost:8080
+$ git clone https://github.com/markxp/govanityurls
+$ cd govanityurls/cmd
+```
+
+2. Build the container image: 
+
+```
+# The `location` is the region of your docker artifact registry, e.g. `us-central1`, `europe-west1` for regional registry, or `asia` for multi-regional registry.
+
+# In this example, we use buildpacks to build the container.
+
+# a. build locally with buildpacks
+$ pack build ${location}-docker.pkg.dev/<your-project>/<repository-name>/<image-name>:<tag> --builder gcr.io/buildpacks/builder:latest
+
+# ... and push it to the artifact registry
+$ docker push ${location}-docker.pkg.dev/<your-project>/<repository-name>/<image-name>:<tag>
+
+
+# or
+# b. you prefer build image remotely on cloud build
+$ gcloud builds submit --pack="builder=gcr.io/buildpacks/builder:latest,image=${location}-docker.pkg.dev/<your-project>/<repository-name>/<image-name>:<tag>"
 ```
 
 
-### Google App Engine
 
-Install [gcloud](https://cloud.google.com/sdk/downloads) and install Go App Engine component:
-
+3. Deploy the application:
 ```
-$ gcloud components install app-engine-go
+# If you use App Engine(standard environment), you do not need to build the container image.
+a. Deploy to App Engine(standard environment)
+# write a app.yaml file....
+$ gcloud app deploy .
+
+b. Deploy to Clou Run
+$ gcloud run deploy --image {image-from-step-2} --platform managed
+...OR deploy without building the image (directly from source code)
+$ cd ../
+$ gcloud run deploy {service-name} --source . --platform managed --region {region} --allow-unauthenticated
 ```
 
-Setup a [custom domain](https://cloud.google.com/appengine/docs/standard/python/using-custom-domains-and-ssl) for your app.
-
-Get the application:
+4. Prepare the storage and Cloud Tasks queue (optional):
 ```
-git clone https://github.com/GoogleCloudPlatform/govanityurls
-cd govanityurls
+# We use firestore as the storage. Create the database.
+
+# (optional) Create the queue. Noting that the service account of the queue should have permission to hit the server's endpoint `POST {host}/_internal/createRepo`.
 ```
 
-Edit `vanity.yaml` to add any number of git repos. E.g., `customdomain.com/portmidi` will
+
+
+(deprecated) View `vanity.yaml` to know how to add repos. E.g., `custom-domain.com/portmidi` will
 serve the [https://github.com/rakyll/portmidi](https://github.com/rakyll/portmidi) repo.
 
 ```
@@ -41,43 +66,16 @@ paths:
     repo: https://github.com/rakyll/portmidi
 ```
 
-You can add as many rules as you wish.
-
-Deploy the app:
-
-```
-$ gcloud app deploy
-```
-
-That's it! You can use `go get` to get the package from your custom domain.
-
+And use the module with `go get`:
 ```
 $ go get customdomain.com/portmidi
 ```
 
-### Running in other environments
-
-You can also deploy this as an App Engine Flexible app by changing the
-`app.yaml` file:
-
-```
-runtime: go
-env: flex
-```
-
-This project is a normal Go HTTP server, so you can also incorporate the
-handler into larger Go servers.
-
-## Configuration File
+## App Configuration
 
 ```
 host: example.com
 cache_max_age: 3600
-paths:
-  /foo:
-    repo: https://github.com/example/foo
-    display: "https://github.com/example/foo https://github.com/example/foo/tree/master{/dir} https://github.com/example/foo/blob/master{/dir}/{file}#L{line}"
-    vcs: git
 ```
 
 <table>
@@ -97,12 +95,7 @@ paths:
     <tr>
       <th scope="row"><code>host</code></th>
       <td>optional</td>
-      <td>Host name to use in meta tags.  If omitted, uses the App Engine default version host or the Host header on non-App Engine Standard environments.  You can use this option to fix the host when using this service behind a reverse proxy or a <a href="https://cloud.google.com/appengine/docs/standard/go/how-requests-are-routed#routing_with_a_dispatch_file">custom dispatch file</a>.</td>
-    </tr>
-    <tr>
-      <th scope="row"><code>paths</code></th>
-      <td>required</td>
-      <td>Map of paths to path configurations.  Each key is a path that will point to the root of a repository hosted elsewhere.  The fields are documented in the Path Configuration section below.</td>
+      <td>Host name to use in meta tags.  If omitted, uses the request "host" haeder to derive host name.  You can use this option to fix the host when using this service behind a reverse proxy or a <a href="https://cloud.google.com/appengine/docs/standard/go/how-requests-are-routed#routing_with_a_dispatch_file">custom dispatch file</a>.</td>
     </tr>
   </tbody>
 </table>
@@ -126,12 +119,12 @@ paths:
     <tr>
       <th scope="row"><code>repo</code></th>
       <td>required</td>
-      <td>Root URL of the repository as it would appear in <a href="https://golang.org/cmd/go/#hdr-Remote_import_paths"><code>go-import</code> meta tag</a>.</td>
+      <td>Root URL of the repository as it would appear in <a href="https://pkg.go.dev/cmd/go#hdr-Remote_import_paths"><code>go-import</code> meta tag</a>.</td>
     </tr>
     <tr>
       <th scope="row"><code>vcs</code></th>
-      <td>required if ambiguous</td>
-      <td>If the version control system cannot be inferred (e.g. for Bitbucket or a custom domain), then this specifies the version control system as it would appear in <a href="https://golang.org/cmd/go/#hdr-Remote_import_paths"><code>go-import</code> meta tag</a>.  This can be one of <code>git</code>, <code>hg</code>, <code>svn</code>, or <code>bzr</code>.</td>
+      <td><b>required</b></td>
+      <td>If the version control system cannot be inferred (e.g. for Bitbucket or a custom domain), then this specifies the version control system as it would appear in <a href="https://pkg.go.dev/cmd/go#hdr-Remote_import_paths"><code>go-import</code> meta tag</a>.  This can be one of <code>git</code>, <code>hg</code>, <code>svn</code>, or <code>bzr</code>.A special value <code>mod</code> can be used to specify the module uses Go Module Proxy to serve bundled source code directly instead of using version control system.</td>
     </tr>
   </tbody>
 </table>

@@ -1,3 +1,5 @@
+# vanity.yaml is not used anymore (suspended).
+# we leave it here for easier learning how to use this program and historical reference.
 host: rakyll.pizza
 
 paths:
@@ -6,3 +8,12 @@ paths:
 
   /launchpad:
     repo: https://github.com/rakyll/launchpad
+
+# A `path` maps to a `repo config`
+# {path string}:
+#   {repo *storage.RepoConfig}
+
+# A `repo config` is a struct that contains the following fields:
+#   repo: {repo string}
+#   display: {display optional string}
+#   vcs: {vcs optional string}
