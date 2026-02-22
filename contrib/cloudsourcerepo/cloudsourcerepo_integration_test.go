@@ -1,3 +1,6 @@
+//go:build integration
+// +build integration
+
 package cloudsourcerepo
 
 import (
@@ -15,7 +18,7 @@ import (
 func TestIntegration_CheckRepo(t *testing.T) {
 	projectID := os.Getenv("GOOGLE_CLOUD_PROJECT")
 	if projectID == "" {
-		t.Skip("Skipping integration test: GOOGLE_CLOUD_PROJECT not set")
+		t.Fatalf("GOOGLE_CLOUD_PROJECT not set")
 	}
 
 	ctx := context.Background()
