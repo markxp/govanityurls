@@ -1,3 +1,6 @@
+//go:build !integration
+// +build !integration
+
 package storage
 
 import (
@@ -10,6 +13,8 @@ type mockStorage struct {
 	data map[string]*RepoConfig
 	err  error
 }
+
+var _ Storage = (*mockStorage)(nil)
 
 func (m *mockStorage) Get(ctx context.Context, path string) (*RepoConfig, error) {
 	if m.err != nil {
