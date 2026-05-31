@@ -9,6 +9,7 @@ import (
 
 var _ registry.Registry = (*Registry)(nil)
 
+// Registry implements registry.Registry for Bitbucket repositories.
 type Registry struct {
 	// Branch is the default branch to use for links (default: main)
 	Branch string

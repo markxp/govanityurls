@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// govanityurls serves Go vanity URLs.
 package govanityurls
 
 import (
@@ -32,16 +31,19 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
+// FallbackConfig configures a fallback repository check registry.
 type FallbackConfig struct {
 	RepoChecker registry.RepoChecker
 	Registry    registry.Registry
 }
 
+// AsyncRegisterConfig configures the task client and service account for asynchronous repository registration.
 type AsyncRegisterConfig struct {
 	TaskClient               TaskSubmitter
 	TaskClientServiceAccount string
 }
 
+// App represents the main application instance.
 type App struct {
 	host        string
 	cacheMaxAge int
@@ -56,10 +58,14 @@ type App struct {
 	logger   slogLimitedLogger
 }
 
-// NewServer creates a new http.Server which responds to Go's import meta tags.
-// The `addr` is http.Server.Addr. It is required, and the format "host:port" is not recommended here. please just use ":port".
-// The `host` is the host name that will be used in the import meta tags. This is required if your app sets behind a reverse proxy, or environment like App Engine or Cloud Run but you only allows the source code to be retrived through the canonical custom domain URL.
-// Besides, you can modify the timeouts of the server, just like a normal `http.Server`.
+// NewApp creates a new App which responds to Go's import meta tags.
+// The host parameter specifies the host name to use in the import meta tags.
+// The cacheMaxAge parameter specifies the amount of time in seconds to cache package pages.
+// The store parameter is the storage backend used to retrieve and store repository configurations.
+// The fallback parameter specifies an optional fallback registry checker.
+// The registries parameter is a slice of registries used to fix repository configurations.
+// The asyncCfg parameter specifies optional configuration for asynchronous registration.
+// The logger parameter specifies the slog limited logger to use.
 func NewApp(host string, cacheMaxAge int, store storage.Storage, fallback *FallbackConfig, registries []registry.Registry, asyncCfg *AsyncRegisterConfig, logger slogLimitedLogger) *App {
 
 	// filter in default values for default config
@@ -106,7 +112,7 @@ func NewApp(host string, cacheMaxAge int, store storage.Storage, fallback *Fallb
 	return app
 }
 
-// GetPublicHandlers returns a sequence of public handlers. It returns a string: http.Handler pair. The string is the path of the handler, which has the compatiable format for http.ServeMux (Go1.22+).
+// GetPublicHandlers returns a sequence of public handlers. It returns a string: http.Handler pair. The string is the path of the handler, which has the compatible format for http.ServeMux (Go1.22+).
 func (app *App) GetPublicHandlers() iter.Seq2[string, http.Handler] {
 	m := make(map[string]http.Handler)
 	m["GET /{$}"] = otelhttp.NewHandler(http.HandlerFunc(app.getIndex), "GET /{$}")
@@ -115,7 +121,7 @@ func (app *App) GetPublicHandlers() iter.Seq2[string, http.Handler] {
 	return maps.All(m)
 }
 
-// GetPrivateHandlers returns a sequence of private handlers. It returns a string: http.Handler pair. The string is the path of the handler, which has the compatiable format for http.ServeMux (Go1.22+).
+// GetPrivateHandlers returns a sequence of private handlers. It returns a string: http.Handler pair. The string is the path of the handler, which has the compatible format for http.ServeMux (Go1.22+).
 func (app *App) GetPrivateHandlers() iter.Seq2[string, http.Handler] {
 	m := make(map[string]http.Handler)
 	if app.asyncCfg != nil {
@@ -128,6 +134,7 @@ func (app *App) GetPrivateHandlers() iter.Seq2[string, http.Handler] {
 	return maps.All(m)
 }
 
+// RegisterShutdownFunc registers the shutdown operations (e.g., closing storage) to the HTTP server.
 func (app *App) RegisterShutdownFunc(s *http.Server) {
 	s.RegisterOnShutdown(func() {
 		if err := app.storage.Close(context.TODO()); err != nil {
@@ -142,12 +149,14 @@ func (app *App) RegisterShutdownFunc(s *http.Server) {
 	})
 }
 
-// getRepo returns HTML web page to human or `go-get` tool.
+// getRepo returns an HTML web page to a human or the `go-get` tool.
 //
-// The strategy of find a Go module is digging upward recursively to find a `go.mod` file.
-// If a request has a URL path = `/a/b/c`, it will ...
-// 1. Try to find `a` as repo name and also the root of `go.mod`, `/b/c` as the sub-package path in the same module.
-// In this scenerio, /a/b/c should return the `go-import` tag points to `example.com/a` as a Go module, the VCS, the address of source code repository,
+// The strategy for finding a Go module is digging upward recursively to find a `go.mod` file.
+// If a request has a URL path = `/a/b/c`, it will:
+//
+//  1. Try to find `a` as the repo name and also the root of `go.mod`, `/b/c` as the sub-package path in the same module.
+//
+// In this scenario, /a/b/c should return the `go-import` tag pointing to `example.com/a` as a Go module, the VCS, and the address of the source code repository.
 func (app *App) getRepo(w http.ResponseWriter, r *http.Request) {
 	ctx, span := tracer.Start(r.Context(), "getRepo")
 	defer span.End()
@@ -298,7 +307,7 @@ func (app *App) getRepoConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 // postRegisterRepoForm registers a new repository. It is for the users to hit.
-// If the app has a task client, it will create a task to do the actual "register repo" job asynchrously.
+// If the app has a task client, it will create a task to do the actual "register repo" job asynchronously.
 // Otherwise, it will do the job synchronously.
 func (app *App) postRegisterRepoForm(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
@@ -318,6 +327,9 @@ func (app *App) postRegisterRepoForm(w http.ResponseWriter, r *http.Request) {
 	if cr.Path == "" {
 		http.Error(w, "path is required", http.StatusBadRequest)
 		return
+	}
+	if !strings.HasPrefix(cr.Path, "/") {
+		cr.Path = "/" + cr.Path
 	}
 	if _, err := app.fixer.Fix(cr.Path, cr.RepoConfig); err != nil {
 		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
@@ -347,7 +359,7 @@ func (app *App) doRegisterRepo(ctx context.Context, path string, rc *storage.Rep
 		return app.storage.Set(ctx, path, rc)
 	}
 
-	// Fires a task to do the actual "create repo" job asynchrously.
+	// Fires a task to do the actual "create repo" job asynchronously.
 	taskPayload := &WriteConfigPayload{
 		Path:   path,
 		Config: rc,
@@ -368,7 +380,7 @@ type registerRepoPayload struct {
 	RepoConfig *storage.RepoConfig `json:"repoConfig"`
 }
 
-// asyncRegisterRepo does the actual "register repo" job asynchrously, triggered by TaskSubmitter.
+// asyncRegisterRepo does the actual "register repo" job asynchronously, triggered by TaskSubmitter.
 func (app *App) asyncRegisterRepo(w http.ResponseWriter, r *http.Request) {
 	ctx, span := tracer.Start(r.Context(), "asyncRegisterRepo")
 	defer span.End()
@@ -385,6 +397,10 @@ func (app *App) asyncRegisterRepo(w http.ResponseWriter, r *http.Request) {
 		app.logger.LogAttrs(r.Context(), slog.LevelInfo, "Payload path or config is missing", slog.Any("payload", payload))
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
+	}
+
+	if !strings.HasPrefix(payload.Path, "/") {
+		payload.Path = "/" + payload.Path
 	}
 
 	if _, err := app.fixer.Fix(payload.Path, payload.Config); err != nil {

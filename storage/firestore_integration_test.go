@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"cloud.google.com/go/firestore"
-	"google.golang.org/api/option"
 )
 
 func TestFirestoreStorage(t *testing.T) {
@@ -67,7 +66,8 @@ func TestFirestoreStorage(t *testing.T) {
 	}
 
 	// 4. Setup client and run tests
-	client, err := firestore.NewClient(ctx, projectID, option.WithoutAuthentication(), option.WithEndpoint(emulatorHost))
+	t.Setenv("FIRESTORE_EMULATOR_HOST", emulatorHost)
+	client, err := firestore.NewClient(ctx, projectID)
 	if err != nil {
 		t.Fatalf("Failed to create Firestore client: %v", err)
 	}

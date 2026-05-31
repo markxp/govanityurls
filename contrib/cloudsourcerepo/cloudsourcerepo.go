@@ -14,11 +14,13 @@ type baseRepoChecker = registry.RepoChecker
 
 var _ baseRepoChecker = (*RepoChecker)(nil)
 
+// RepoChecker implements registry.RepoChecker for Google Cloud Source Repositories.
 type RepoChecker struct {
 	svc       *sourcerepo.Service
 	projectID string
 }
 
+// NewService creates a new RepoChecker with a Google Cloud Source Repositories client.
 func NewService(ctx context.Context, projectID string, opts ...option.ClientOption) (*RepoChecker, error) {
 	svc, err := sourcerepo.NewService(ctx, opts...)
 	if err != nil {
@@ -31,7 +33,7 @@ func NewService(ctx context.Context, projectID string, opts ...option.ClientOpti
 // It returns the repository URL if found, or an empty string if not found.
 // The path is expected to be the repository name (e.g., "my-repo").
 func (s *RepoChecker) CheckRepo(_ context.Context, repoName string) (string, error) {
-	// TODO: intruduce otel tracing.
+	// TODO: introduce otel tracing.
 	// Ensure repoName doesn't have leading slash
 	repoName = strings.TrimPrefix(repoName, "/")
 
@@ -50,6 +52,7 @@ func (s *RepoChecker) CheckRepo(_ context.Context, repoName string) (string, err
 	return repo.Url, nil
 }
 
+// Registry implements registry.Registry for Google Cloud Source Repositories.
 type Registry struct {
 	Branch string
 }
@@ -83,10 +86,9 @@ func (r *Registry) Display(importPath, repo string) string {
 	return fmt.Sprintf("%s %s/+/%s:{dir} %s/+/%s:{dir}/{file}#L{line}", uiURL, uiURL, b, uiURL, b)
 }
 
-// Subdir returns the subdirectory of the import path.
-// extract the subdir from importPath based on the repo url.
+// Subdir returns the subdirectory of the import path, extracting it from the importPath based on the repo URL.
 //
-// The `go-import` meta tag support `subdir` from Go 1.25.
+// The `go-import` meta tag supports `subdir` from Go 1.25.
 // Use `go help importpath` in Go 1.25+ to see the details.
 func (r *Registry) Subdir(importPath, repo string) string {
 	// Extract reponame from repo url (e.g. .../r/reponame)

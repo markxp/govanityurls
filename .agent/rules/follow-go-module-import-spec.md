@@ -1,95 +1,64 @@
 ---
 trigger: model_decision
-description: This is our goal.
+description: Specifications and validation rules for Go vanity URL import tags.
 ---
 
-# Goal of the project
+# Go Vanity URLs Import Specification
 
-This is a library and binary to create a HTTP server, serving Go modules' vanity URLs. 
-We register a path to a Go module. If a user asks for a package in the module, we direct him to the documentation page. If a `go get` tool asks for downloading a package, we should return how to access to the zip bundle through Go Proxy Protocol, or how to download the source code and locate its `go.mod` file.
+This document defines the rules, behavior, and formatting requirements for serving Go vanity URL import metadata. It covers the general HTTP handling, meta tag output structure (including the `subdir` field introduced in Go 1.25), and repository configuration validation.
 
-The specification are listed in the next section.
+## 1. HTTP Server Requirements
 
-# Source
+- **Vanity URL Matching**: The server matches import paths against registered repository configurations using a recursive search (digging upward from the requested sub-package path to locate the root of the Go module).
+- **Request Identification**:
+  - **Go Tool Request**: When the Go command requests source code (e.g., via `go get`), it queries the URL with the parameter `?go-get=1`. In this case, the server **MUST** return an HTML page containing `<meta>` tags in the `<head>`.
+  - **Human/Browser Request**: If `go-get=1` is *not* present, the server **MUST** serve a human-readable documentation or landing page, and it **MUST NOT** include `go-import` tags.
+- **Header Placement**: The `<meta>` tags must appear as early in the HTML document as possible, specifically before any raw JavaScript or CSS, to prevent parsing issues with the Go tool's restricted parser.
 
-## Remote import paths
+## 2. Meta Tag Output Syntax
 
-Certain import paths also describe how to obtain the source code for the package using a revision control system.
-For code hosted on other servers, import paths may either be qualified with the version control type, or the go tool can dynamically fetch the import path over https/http and discover where the code resides from a <meta> tag in the HTML.
+### The `go-import` Tag
+The `go-import` tag declares the source code location of the package. It has two formats depending on the Go version compatibility and VCS configuration:
 
-To declare the code location, an import path of the form
-```
-repository.vcs/path
-```
-
-specifies the given repository, with or without the .vcs suffix, using the named version control system, and then the path inside that repository. The supported version control systems are:
-```
-Bazaar      .bzr
-Fossil      .fossil
-Git         .git
-Mercurial   .hg
-Subversion  .svn
-```
-For example,
-
-```
-import "example.org/user/foo.hg"
-```
-denotes the root directory of the Mercurial repository at example.org/user/foo, and
-
-```
-import "example.org/repo.git/foo/bar"
-```
-denotes the foo/bar directory of the Git repository at example.org/repo.
-
-
-If the import path is not a known code hosting site and also lacks a version control qualifier, the go tool attempts to fetch the import over https/http and looks for a <meta> tag in the document's HTML <head>.
-
-The meta tag has the form:
-```
+#### Standard Format
+```html
 <meta name="go-import" content="import-prefix vcs repo-root">
 ```
-Starting in Go 1.25, an optional subdirectory will be recognized by the go command:
-```
+
+#### Subdirectory Format (Supported in Go 1.25+)
+For repositories organized with Go module roots in a subdirectory:
+```html
 <meta name="go-import" content="import-prefix vcs repo-root subdir">
 ```
-The import-prefix is the import path corresponding to the repository root. It must be a prefix or an exact match of the package being fetched with "go get". If it's not an exact match, another http request is made at the prefix to verify the <meta> tags match.
+*Note: If `subdir` is set, all VCS tags must be prefixed with `subdir` (e.g., `subdir/v1.2.3`).*
 
-The meta tag should appear as early in the file as possible. In particular, it should appear before any raw JavaScript or CSS, to avoid confusing the go command's restricted parser.
-
-The vcs is one of "bzr", "fossil", "git", "hg", "svn".
-
-The repo-root is the root of the version control system containing a scheme and not containing a .vcs qualifier.
-
-The subdir specifies the directory within the repo-root where the Go module's root (including its go.mod file) is located. It allows you to organize your repository with the Go module code in a subdirectory rather than directly at the repository's root. If set, all vcs tags must be prefixed with "subdir". i.e. "subdir/v1.2.3"
-
-For example,
-
-```
-import "example.org/pkg/foo"
-```
-will result in the following requests:
-
-```
-https://example.org/pkg/foo?go-get=1 (preferred)
-http://example.org/pkg/foo?go-get=1  (fallback, only with use of correctly set GOINSECURE) (we do not support http, ignore this.)
+#### Go Module Proxy (preferred over VCS)
+```html
+<meta name="go-import" content="import-prefix mod proxy-url">
 ```
 
-If that page contains the meta tag
+### The `go-source` Tag
+The `go-source` tag provides links to code browsing UIs (e.g., for `pkg.go.dev`):
+```html
+<meta name="go-source" content="import-prefix ui-home ui-directory ui-file">
 ```
-<meta name="go-import" content="example.org git https://code.org/r/p/exproj">
-```
-the go tool will verify that https://example.org/?go-get=1 contains the same meta tag and then download the code from the Git repository at https://code.org/r/p/exproj
 
-If that page contains the meta tag
-```
-<meta name="go-import" content="example.org git https://code.org/r/p/exproj foo/subdir">
-```
-the go tool will verify that https://example.org/?go-get=1 contains the same meta tag and then download the code from the "foo/subdir" subdirectory within the Git repository at https://code.org/r/p/exproj
+---
 
-When using modules, an additional variant of the go-import meta tag is recognized and is preferred over those listing version control systems. That variant uses "mod" as the vcs in the content value, as in:
+## 3. Configuration Fields and Validation Rules
 
-```
-<meta name="go-import" content="example.org mod https://code.org/moduleproxy">
-```
-This tag means to fetch modules with paths beginning with example.org from the module proxy available at the URL https://code.org/moduleproxy.
+All repository configurations stored in the system must conform to the following rules:
+
+| Field | Description / Format | Validation Constraints |
+| :--- | :--- | :--- |
+| **Path** | The URL path prefix representing the module. | **Must start with `/`** (e.g., `/foo`). If registration input is missing the prefix, it must be normalized. |
+| **Repo** | The source code repository root URL. | Must use `https://` (e.g., `https://github.com/user/project`). |
+| **VCS** | The Version Control System type. | Must be one of: `git`, `hg`, `svn`, `bzr`, `fossil`, or `mod`. |
+| **Display** | String of 3 space-separated URLs (`ui-home`, `ui-directory`, `ui-file`). | Must contain at least 3 URL templates. Placeholders: `{/dir}`, `{dir}`, `{file}`, and `{line}`. |
+| **Subdir** | Optional directory path inside the VCS repository root. | Allowed for Go 1.25+ module structures. |
+
+### Display Placeholders Reference:
+- `{/dir}`: Replaces the directory with `dir`. If `dir` is not empty, it adds a leading slash (e.g., `/tools`, `""`).
+- `{dir}`: Replaces the directory with `dir` exactly (e.g., `tools`, `""`).
+- `{file}`: Replaces the file with `file` (e.g., `doc.go`).
+- `{line}`: Replaces the line with `line` (e.g., `42`).

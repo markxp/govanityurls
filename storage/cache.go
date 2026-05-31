@@ -9,11 +9,13 @@ import (
 
 var _ Storage = (*InMemoryCache)(nil)
 
+// InMemoryCache implements Storage and caches repository configurations in memory using an LRU cache.
 type InMemoryCache struct {
 	cache *expirable.LRU[string, *RepoConfig]
 	next  Storage
 }
 
+// NewInMemoryCache creates a new InMemoryCache with the specified cache size and TTL, backed by the next Storage.
 func NewInMemoryCache(size int, ttl time.Duration, next Storage) *InMemoryCache {
 	cache := expirable.NewLRU[string, *RepoConfig](size, nil, ttl)
 	return &InMemoryCache{
@@ -71,6 +73,7 @@ func (s *InMemoryCache) Delete(ctx context.Context, path string) error {
 	return nil
 }
 
+// Clear purges all items from the cache.
 func (s *InMemoryCache) Clear(ctx context.Context) {
 	_, span := tracer.Start(ctx, "InMemoryCache.Clear")
 	defer span.End()

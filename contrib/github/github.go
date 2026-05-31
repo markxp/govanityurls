@@ -9,6 +9,7 @@ import (
 
 var _ registry.Registry = (*GithubRegistry)(nil)
 
+// GithubRegistry implements registry.Registry for GitHub repositories.
 type GithubRegistry struct {
 	Branch     string
 	DefaultVCS string

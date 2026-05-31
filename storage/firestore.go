@@ -18,11 +18,13 @@ import (
 
 var _ Storage = (*FirestoreStorage)(nil)
 
+// FirestoreStorage implements Storage using Google Cloud Firestore as the backend.
 type FirestoreStorage struct {
 	client     *firestore.Client
 	collection string
 }
 
+// NewFirestoreStorage creates a new FirestoreStorage with the given Firestore client and collection.
 func NewFirestoreStorage(client *firestore.Client, collection string) *FirestoreStorage {
 	return &FirestoreStorage{
 		client:     client,
@@ -117,5 +119,12 @@ func encodePath(path string) string {
 }
 
 func decodePath(encodedPath string) (string, error) {
-	return url.PathUnescape(encodedPath)
+	p, err := url.PathUnescape(encodedPath)
+	if err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	return p, nil
 }

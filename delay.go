@@ -17,7 +17,7 @@ type WriteConfigPayload struct {
 	Config *storage.RepoConfig `json:"config"`
 }
 
-// TaskSubmitter let us do asynchrous write-back to storage.
+// TaskSubmitter allows asynchronous write-back to storage.
 type TaskSubmitter interface {
 	CreateTask(ctx context.Context, payload *WriteConfigPayload) error
 	Close(ctx context.Context) error
@@ -26,7 +26,7 @@ type TaskSubmitter interface {
 // compilation type checking
 var _ TaskSubmitter = (*CloudTasksSubmitter)(nil)
 
-// CloudTasksSubmitter implements TaskSubmitter. It uses Cloud Tasks to do asynchrous calls.
+// CloudTasksSubmitter implements TaskSubmitter. It uses Cloud Tasks to do asynchronous calls.
 // It manages submitting tasks to Google Cloud Tasks.
 type CloudTasksSubmitter struct {
 	client              *cloudtasks.Client

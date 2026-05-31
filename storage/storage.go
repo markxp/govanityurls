@@ -18,7 +18,7 @@ type Storage interface {
 	// It returns nil, nil if the path is not found.
 	Get(ctx context.Context, path string) (*RepoConfig, error)
 
-	// ListAll lists all the Go modules. return with path
+	// ListAll lists all the Go modules. It returns a slice of paths.
 	ListAll(ctx context.Context) ([]string, error)
 
 	// Set stores the configuration for the given path.
@@ -28,6 +28,6 @@ type Storage interface {
 	Delete(ctx context.Context, path string) error
 
 	// Close cleans up any resources used by the storage.
-	// the passing context is used for tracing.
+	// The context parameter is used for tracing.
 	Close(ctx context.Context) error
 }

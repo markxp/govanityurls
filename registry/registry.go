@@ -25,32 +25,34 @@ type Registry interface {
 	// The available values are "git", "hg", "svn", "bzr", "fossil" or "mod" (for Go module proxy)
 	VCS() string
 
-	// Display returns the content for `go-source` meta tag from the second to the fourth field.
+	// Display returns the content for the `go-source` meta tag from the second to the fourth field.
 	// It returns the content of 3 fields: `ui-home`, `ui-directory`, `ui-file`.
-	// There are placeholders for `ui-directory` and `ui-file` for directory, file, and line level search.
+	// There are placeholders for `ui-directory` and `ui-file` for directory, file, and line level search:
 	//
-	// {/dir} replace the directory with "dir". if the "dir" is not empty, add a trailing slash at the beginning. eg. "/tools", ""
-	// {dir} replace the directory with "dir". eg. "tools", ""
-	// {file} replace the file with "file". eg. "doc.go"
-	// {line} replace the line with "line". eg. 42
+	//   - {/dir} replaces the directory with "dir". If "dir" is not empty, it adds a leading slash. E.g., "/tools", "".
+	//   - {dir} replaces the directory with "dir". E.g., "tools", "".
+	//   - {file} replaces the file with "file". E.g., "doc.go".
+	//   - {line} replaces the line with "line". E.g., 42.
 	//
-	// For real world example, Github uses  ".../tree/main{/dir}" for `ui-directory`.
-	// If we asks for root directory, it returns ".../tree/main".
-	// If we asks for tools directory, it returns ".../tree/main/tools".
+	// For a real-world example, GitHub uses ".../tree/main{/dir}" for `ui-directory`:
+	//
+	//   - If the root directory is requested, it returns ".../tree/main".
+	//   - If the tools directory is requested, it returns ".../tree/main/tools".
 	//
 	// The purpose of `go-source` is to provide code browsing UI links to pkg.go.dev.
 	Display(importPath, repo string) string
 
-	// Subdir returns the subdirectory of the import path.
-	// extract the subdir from importPath based on the repo url.
+	// Subdir returns the subdirectory of the import path, extracting it from the importPath based on the repo URL.
 	//
-	// The `go-import` meta tag support `subdir` from Go 1.25.
+	// The `go-import` meta tag supports `subdir` from Go 1.25.
 	// Use `go help importpath` in Go 1.25+ to see the details.
 	Subdir(importPath, repo string) string
 }
 
+// RepoConfigFixer matches import hostnames with registries to automatically fix repository configurations.
 type RepoConfigFixer map[string]Registry
 
+// Add registers a new Registry to the RepoConfigFixer.
 func (r RepoConfigFixer) Add(registry Registry) {
 	if r == nil {
 		r = make(RepoConfigFixer)
@@ -58,6 +60,7 @@ func (r RepoConfigFixer) Add(registry Registry) {
 	r[registry.ServerName()] = registry
 }
 
+// Fix applies the registries in the fixer to complete missing fields in a RepoConfig, then validates it.
 func (r RepoConfigFixer) Fix(importPath string, config *storage.RepoConfig) (*storage.RepoConfig, error) {
 	if config == nil {
 		return nil, errors.New("repo config is required")
