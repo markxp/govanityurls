@@ -3,147 +3,284 @@ package govanityurls
 import "html/template"
 
 const styleCSS = `
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
 :root {
-    --bg-color: #f9fafb;
-    --card-bg: #ffffff;
-    --text-main: #111827;
-    --text-muted: #6b7280;
-    --primary: #4f46e5;
-    --primary-hover: #4338ca;
-    --border: #e5e7eb;
-    --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-    --radius: 0.5rem;
-    --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --bg-color: #0b0f19;
+    --bg-gradient: radial-gradient(circle at 50% 0%, #1e1b4b 0%, #0b0f19 70%);
+    --card-bg: rgba(17, 24, 39, 0.7);
+    --card-border: rgba(255, 255, 255, 0.08);
+    --card-hover-border: rgba(99, 102, 241, 0.4);
+    --text-main: #f3f4f6;
+    --text-muted: #9ca3af;
+    --primary: #6366f1;
+    --primary-hover: #4f46e5;
+    --primary-glow: rgba(99, 102, 241, 0.3);
+    --success: #10b981;
+    --success-bg: rgba(16, 185, 129, 0.1);
+    --success-border: rgba(16, 185, 129, 0.2);
+    --border: rgba(255, 255, 255, 0.08);
+    --radius: 1rem;
+    --font-sans: 'Outfit', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
 }
 
 body {
     font-family: var(--font-sans);
-    background-color: var(--bg-color);
+    background: var(--bg-color);
+    background-image: var(--bg-gradient);
     color: var(--text-main);
-    line-height: 1.5;
+    line-height: 1.6;
     margin: 0;
-    padding: 2rem 1rem;
+    padding: 3rem 1rem;
     display: flex;
     flex-direction: column;
     align-items: center;
     min-height: 100vh;
+    box-sizing: border-box;
 }
 
 .container {
     width: 100%;
-    max-width: 42rem;
+    max-width: 44rem;
     margin: 0 auto;
 }
 
 .card {
     background: var(--card-bg);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     border-radius: var(--radius);
-    box-shadow: var(--shadow);
-    padding: 2rem;
-    border: 1px solid var(--border);
+    padding: 2.5rem;
+    border: 1px solid var(--card-border);
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 10px 10px -5px rgba(0, 0, 0, 0.4);
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.card:hover {
+    border-color: var(--card-hover-border);
+    box-shadow: 0 25px 30px -5px rgba(0, 0, 0, 0.6), 0 0 20px 0 rgba(99, 102, 241, 0.15);
 }
 
 h1, h2 {
-    color: var(--text-main);
     font-weight: 700;
     margin-top: 0;
+    letter-spacing: -0.025em;
 }
 
-h1 { font-size: 1.875rem; margin-bottom: 1.5rem; text-align: center; }
-h2 { font-size: 1.25rem; margin-top: 2rem; margin-bottom: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+h1 {
+    font-size: 2.25rem;
+    margin-bottom: 1.5rem;
+    text-align: center;
+    background: linear-gradient(135deg, #ffffff 30%, #a5b4fc 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
 
-p { color: var(--text-muted); margin-bottom: 1rem; }
+h2 {
+    font-size: 1.35rem;
+    margin-top: 2rem;
+    margin-bottom: 1.25rem;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.75rem;
+    color: #e0e7ff;
+}
 
-a { color: var(--primary); text-decoration: none; font-weight: 500; transition: color 0.15s; }
-a:hover { color: var(--primary-hover); text-decoration: underline; }
+p { color: var(--text-muted); margin-bottom: 1.25rem; }
 
-ul, ol { padding-left: 1.5rem; margin: 0 0 1rem 0; }
-li { padding: 0.5rem 0; color: var(--text-muted); }
-ul { list-style-type: disc; }
-ol { list-style-type: decimal; }
+a {
+    color: #a5b4fc;
+    text-decoration: none;
+    font-weight: 500;
+    transition: color 0.2s ease, text-shadow 0.2s ease;
+}
 
-.help-list li { border-bottom: none; }
+a:hover {
+    color: #c7d2fe;
+    text-shadow: 0 0 8px rgba(199, 210, 254, 0.4);
+}
 
-label { display: block; font-weight: 500; margin-bottom: 0.25rem; color: var(--text-main); }
-.required::after { content: " *"; color: #ef4444; }
-input:required, select:required { border-left: 3px solid var(--primary); }
+ul, ol { padding-left: 1.5rem; margin: 0 0 1.25rem 0; }
+li { padding: 0.4rem 0; color: var(--text-muted); }
+
+.help-list li { border-bottom: none; list-style-position: inside; }
+
+label {
+    display: block;
+    font-weight: 500;
+    margin-bottom: 0.5rem;
+    color: #e0e7ff;
+    font-size: 0.925rem;
+}
+
+.required::after { content: " *"; color: #f87171; }
 
 input[type="text"], select {
     width: 100%;
-    padding: 0.5rem 0.75rem;
-    border-radius: 0.375rem;
+    padding: 0.75rem 1rem;
+    border-radius: 0.5rem;
+    background: rgba(17, 24, 39, 0.5);
     border: 1px solid var(--border);
-    margin-bottom: 1rem;
+    color: var(--text-main);
+    margin-bottom: 1.25rem;
     font-size: 1rem;
-    box-sizing: border-box; /* Ensure padding doesn't affect width */
+    box-sizing: border-box;
+    font-family: var(--font-sans);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
 }
 
 input[type="text"]:focus, select:focus {
-    outline: 2px solid var(--primary);
-    border-color: transparent;
+    outline: none;
+    border-color: var(--primary);
+    background: rgba(17, 24, 39, 0.8);
+    box-shadow: 0 0 0 3px var(--primary-glow);
+}
+
+input:required, select:required {
+    border-left: 3px solid var(--primary);
 }
 
 button {
-    background-color: var(--primary);
+    background: linear-gradient(135deg, var(--primary) 0%, #4f46e5 100%);
     color: white;
     font-weight: 600;
-    padding: 0.625rem 1.25rem;
-    border-radius: 0.375rem;
+    padding: 0.875rem 1.5rem;
+    border-radius: 0.5rem;
     border: none;
     cursor: pointer;
     width: 100%;
     font-size: 1rem;
-    transition: background-color 0.15s;
+    font-family: var(--font-sans);
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2), 0 0 12px 0 rgba(99, 102, 241, 0.1);
+    transition: transform 0.15s ease, background 0.2s ease, box-shadow 0.2s ease;
 }
 
-button:hover { background-color: var(--primary-hover); }
+button:hover {
+    background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%);
+    box-shadow: 0 6px 12px -1px rgba(0, 0, 0, 0.3), 0 0 16px 0 rgba(99, 102, 241, 0.2);
+}
+
+button:active {
+    transform: scale(0.985);
+}
 
 .code-block {
-    background-color: #f3f4f6;
-    padding: 1rem;
-    border-radius: 0.375rem;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    font-size: 0.875rem;
-    color: #1f2937;
+    background-color: #030712;
+    padding: 1.25rem;
+    border-radius: 0.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.9rem;
+    color: #38bdf8;
     overflow-x: auto;
-    border: 1px solid #d1d5db;
-    box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    box-shadow: inset 0 2px 4px 0 rgba(0, 0, 0, 0.5);
+    margin: 1.5rem 0;
 }
 
 code {
-    background-color: #f3f4f6;
+    background-color: #111827;
     padding: 0.2rem 0.4rem;
     border-radius: 0.25rem;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-family: var(--font-mono);
     font-size: 0.9em;
-    color: #df1b1b;
-    border: 1px solid #e5e7eb;
+    color: #f472b6;
+    border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 .back-link {
     display: inline-block;
-    margin-top: 1.5rem;
-    font-size: 0.875rem;
-}
-
-.btn-group { display: flex; gap: 1rem; justify-content: center; margin-top: 2rem; }
-.btn {
-    display: inline-block;
-    padding: 0.625rem 1.25rem;
-    border-radius: 0.375rem;
-    text-decoration: none;
-    font-weight: 500;
+    margin-top: 2rem;
+    font-size: 0.9rem;
     text-align: center;
 }
-.btn-primary { background: var(--primary); color: white; }
-.btn-primary:hover { background: var(--primary-hover); text-decoration: none; }
-.btn-secondary { background: white; border: 1px solid var(--border); color: var(--text-main); }
-.btn-secondary:hover { background: #f9fafb; text-decoration: none; }
+
+.btn-group {
+    display: flex;
+    gap: 1.25rem;
+    justify-content: center;
+    margin-top: 2rem;
+}
+
+.btn {
+    display: inline-block;
+    padding: 0.875rem 1.75rem;
+    border-radius: 0.5rem;
+    text-decoration: none;
+    font-weight: 600;
+    text-align: center;
+    font-size: 0.95rem;
+    transition: transform 0.15s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.btn:active {
+    transform: scale(0.985);
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, var(--primary) 0%, #4f46e5 100%);
+    color: white;
+    box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2), 0 0 12px 0 rgba(99, 102, 241, 0.1);
+}
+
+.btn-primary:hover {
+    background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%);
+    text-decoration: none;
+    color: white;
+    box-shadow: 0 6px 12px -1px rgba(0, 0, 0, 0.3), 0 0 16px 0 rgba(99, 102, 241, 0.2);
+}
+
+.btn-secondary {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border);
+    color: var(--text-main);
+}
+
+.btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.1);
+    text-decoration: none;
+    color: white;
+}
+
+.module-list {
+    list-style: none;
+    padding: 0;
+    margin: 1.5rem 0;
+}
+
+.module-item {
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    margin-bottom: 0.75rem;
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.module-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(99, 102, 241, 0.3);
+}
+
+.module-link {
+    display: block;
+    padding: 0.875rem 1.25rem;
+    color: var(--text-main);
+    font-family: var(--font-mono);
+    font-size: 0.95rem;
+    font-weight: 500;
+}
+
+.module-link:hover {
+    color: #a5b4fc;
+    text-shadow: 0 0 8px rgba(199, 210, 254, 0.4);
+    text-decoration: none;
+}
 
 /* Responsive adjustments */
 @media (max-width: 640px) {
-    .container { padding: 0 1rem; }
-    .card { padding: 1.5rem; }
+    body { padding: 1.5rem 0.5rem; }
+    .card { padding: 1.75rem; }
+    .btn-group { flex-direction: column; gap: 0.75rem; }
+    .btn { width: 100%; box-sizing: border-box; }
 }
 `
 
@@ -160,13 +297,13 @@ var indexTmpl = template.Must(template.New("index").Parse(`<!DOCTYPE html>
         <div class="card">
             <h1>{{.Host}}</h1>
             <p style="text-align: center;">Available Go Modules</p>
-            <ul>
+            <ul class="module-list">
                 {{range .Paths}}
-                <li>
-                    <a href="https://pkg.go.dev/{{$.Host}}/{{.}}">{{$.Host}}/{{.}}</a>
+                <li class="module-item">
+                    <a class="module-link" href="https://pkg.go.dev/{{$.Host}}/{{.}}">{{$.Host}}/{{.}}</a>
                 </li>
                 {{else}}
-                <li style="text-align: center; color: var(--text-muted);">No modules found.</li>
+                <li style="text-align: center; color: var(--text-muted); padding: 1.5rem 0;">No modules found.</li>
                 {{end}}
             </ul>
             <div style="text-align: center; margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border);">
@@ -221,7 +358,7 @@ var registerRepoTmpl = template.Must(template.New("registerRepo").Parse(`<!DOCTY
             </form>
 
             {{if .Message}}
-            <div style="margin-top: 1.5rem; padding: 1rem; background-color: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 0.375rem; color: #065f46;">
+            <div style="margin-top: 1.5rem; padding: 1rem; background-color: var(--success-bg); border: 1px solid var(--success-border); border-radius: 0.5rem; color: var(--success); font-weight: 500;">
                 {{.Message}}
             </div>
             {{end}}
@@ -246,7 +383,7 @@ var registerRepoTmpl = template.Must(template.New("registerRepo").Parse(`<!DOCTY
             <ul class="help-list">
                 <li><strong>GitHub:</strong> <code>https://github.com/&lt;user&gt;/&lt;repo&gt; https://github.com/&lt;user&gt;/&lt;repo&gt;/tree/main{/dir} https://github.com/&lt;user&gt;/&lt;repo&gt;/blob/main{/dir}/{file}#L{line}</code></li>
                 <li><strong>GitLab:</strong> <code>https://gitlab.com/&lt;user&gt;/&lt;repo&gt; https://gitlab.com/&lt;user&gt;/&lt;repo&gt;/-/tree/main{/dir} https://gitlab.com/&lt;user&gt;/&lt;repo&gt;/-/blob/main{/dir}/{file}#L{line}</code></li>
-                <li><strong>Bitbucket:</strong> <code>https://bitbucket.org/&lt;user&gt;/&lt;repo&gt; https://bitbucket.org/&lt;user&gt;/&lt;repo&gt/src/main{/dir} https://bitbucket.org/&lt;user&gt;/&lt;repo&gt/src/main{/dir}/{file}#lines-{line}</code></li>
+                <li><strong>Bitbucket:</strong> <code>https://bitbucket.org/&lt;user&gt;/&lt;repo&gt; https://bitbucket.org/&lt;user&gt;/&lt;repo&gt;/src/main{/dir} https://bitbucket.org/&lt;user&gt;/&lt;repo&gt;/src/main{/dir}/{file}#lines-{line}</code></li>
                 <li><strong>Cloud Source Repositories:</strong> <code>https://source.cloud.google.com/p/&lt;project&gt;/r/&lt;repo&gt; https://source.cloud.google.com/p/&lt;project&gt;/r/&lt;repo&gt;/+/main:{dir} https://source.cloud.google.com/p/&lt;project&gt;/r/&lt;repo&gt;/+/main:{dir}/{file}#L{line}</code></li>
             </ul>
         </div>

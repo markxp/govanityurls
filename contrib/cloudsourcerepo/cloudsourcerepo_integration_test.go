@@ -1,5 +1,4 @@
 //go:build integration
-// +build integration
 
 package cloudsourcerepo
 
@@ -50,13 +49,13 @@ func TestIntegration_CheckRepo(t *testing.T) {
 	t.Logf("Created test repo: %s", createdRepo.Name)
 
 	// Cleanup
-	defer func() {
+	t.Cleanup(func() {
 		if _, err := adminSvc.Projects.Repos.Delete(createdRepo.Name).Do(); err != nil {
 			t.Errorf("Failed to delete test repo: %v", err)
 		} else {
 			t.Logf("Deleted test repo: %s", createdRepo.Name)
 		}
-	}()
+	})
 
 	// Test CheckRepo - Positive Case
 	url, err := svc.CheckRepo(context.Background(), repoName)

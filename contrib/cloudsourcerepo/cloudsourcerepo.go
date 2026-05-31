@@ -91,20 +91,5 @@ func (r *Registry) Display(importPath, repo string) string {
 // The `go-import` meta tag supports `subdir` from Go 1.25.
 // Use `go help importpath` in Go 1.25+ to see the details.
 func (r *Registry) Subdir(importPath, repo string) string {
-	// Extract reponame from repo url (e.g. .../r/reponame)
-	parts := strings.Split(repo, "/r/")
-	if len(parts) < 2 {
-		return ""
-	}
-	repoName := parts[len(parts)-1]
-
-	// Find the part after reponame in importPath
-	// importPath: host/reponame/subdir
-	idx := strings.Index(importPath, repoName)
-	if idx == -1 {
-		return ""
-	}
-
-	subdir := importPath[idx+len(repoName):]
-	return strings.TrimPrefix(subdir, "/")
+	return registry.ExtractSubdir(importPath, repo)
 }

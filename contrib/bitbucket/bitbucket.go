@@ -2,7 +2,6 @@ package bitbucket
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/markxp/govanityurls/registry"
 )
@@ -45,20 +44,5 @@ func (r *Registry) Display(importPath, repo string) string {
 
 // Subdir returns the subdirectory of the import path.
 func (r *Registry) Subdir(importPath, repo string) string {
-	// Extract reponame from repo url (e.g. https://bitbucket.org/user/reponame)
-	parts := strings.Split(repo, "/")
-	if len(parts) < 1 {
-		return ""
-	}
-	repoName := parts[len(parts)-1]
-
-	// Find the part after reponame in importPath
-	// importPath: path/to/reponame/subdir
-	idx := strings.Index(importPath, repoName)
-	if idx == -1 {
-		return ""
-	}
-
-	subdir := importPath[idx+len(repoName):]
-	return strings.TrimPrefix(subdir, "/")
+	return registry.ExtractSubdir(importPath, repo)
 }

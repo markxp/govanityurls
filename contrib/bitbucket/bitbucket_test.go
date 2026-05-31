@@ -57,6 +57,33 @@ func TestBitbucketRegistry(t *testing.T) {
 			wantDisp:   "https://bitbucket.org/user/my-repo https://bitbucket.org/user/my-repo/src/main{/dir} https://bitbucket.org/user/my-repo/src/main{/dir}/{file}#lines-{line}",
 			wantSubdir: "",
 		},
+		{
+			name:       "with subdirectory and .git suffix in repoURL",
+			importPath: "vanity.com/my-repo/pkg/util",
+			repoURL:    "https://bitbucket.org/user/my-repo.git",
+			wantServer: "bitbucket.org",
+			wantVCS:    "git",
+			wantDisp:   "https://bitbucket.org/user/my-repo.git https://bitbucket.org/user/my-repo.git/src/main{/dir} https://bitbucket.org/user/my-repo.git/src/main{/dir}/{file}#lines-{line}",
+			wantSubdir: "pkg/util",
+		},
+		{
+			name:       "with subdirectory and trailing slash in repoURL",
+			importPath: "vanity.com/my-repo/pkg/util",
+			repoURL:    "https://bitbucket.org/user/my-repo/",
+			wantServer: "bitbucket.org",
+			wantVCS:    "git",
+			wantDisp:   "https://bitbucket.org/user/my-repo/ https://bitbucket.org/user/my-repo//src/main{/dir} https://bitbucket.org/user/my-repo//src/main{/dir}/{file}#lines-{line}",
+			wantSubdir: "pkg/util",
+		},
+		{
+			name:       "partial segment mismatch",
+			importPath: "vanity.com/my-repo-special/pkg",
+			repoURL:    "https://bitbucket.org/user/my-repo",
+			wantServer: "bitbucket.org",
+			wantVCS:    "git",
+			wantDisp:   "https://bitbucket.org/user/my-repo https://bitbucket.org/user/my-repo/src/main{/dir} https://bitbucket.org/user/my-repo/src/main{/dir}/{file}#lines-{line}",
+			wantSubdir: "",
+		},
 	}
 
 	for _, tt := range tests {

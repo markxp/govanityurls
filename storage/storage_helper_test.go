@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"slices"
 	"testing"
 )
 
@@ -34,13 +35,7 @@ func testStorage(t *testing.T, s Storage) {
 	if err != nil {
 		t.Fatalf("ListAll: %v", err)
 	}
-	found := false
-	for _, p := range paths {
-		if p == "/repo" {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(paths, "/repo")
 	if !found {
 		t.Errorf("ListAll did not find /repo in %v", paths)
 	}

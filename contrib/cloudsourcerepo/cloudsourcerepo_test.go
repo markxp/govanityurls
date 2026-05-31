@@ -1,5 +1,4 @@
 //go:build !integration
-// +build !integration
 
 package cloudsourcerepo
 
@@ -49,6 +48,33 @@ func TestRegistry(t *testing.T) {
 			wantVCS:    "git",
 			wantDisp:   "https://source.cloud.google.com/project/my-repo https://source.cloud.google.com/project/my-repo/+/main:{dir} https://source.cloud.google.com/project/my-repo/+/main:{dir}/{file}#L{line}",
 			wantSubdir: "pkg/util",
+		},
+		{
+			name:       "with subdirectory and .git suffix in repoURL",
+			importPath: "vanity.com/my-repo/pkg/util",
+			repoURL:    "https://source.developers.google.com/p/project/r/my-repo.git",
+			wantServer: "source.developers.google.com",
+			wantVCS:    "git",
+			wantDisp:   "https://source.cloud.google.com/project/my-repo.git https://source.cloud.google.com/project/my-repo.git/+/main:{dir} https://source.cloud.google.com/project/my-repo.git/+/main:{dir}/{file}#L{line}",
+			wantSubdir: "pkg/util",
+		},
+		{
+			name:       "with subdirectory and trailing slash in repoURL",
+			importPath: "vanity.com/my-repo/pkg/util",
+			repoURL:    "https://source.developers.google.com/p/project/r/my-repo/",
+			wantServer: "source.developers.google.com",
+			wantVCS:    "git",
+			wantDisp:   "https://source.cloud.google.com/project/my-repo/ https://source.cloud.google.com/project/my-repo//+/main:{dir} https://source.cloud.google.com/project/my-repo//+/main:{dir}/{file}#L{line}",
+			wantSubdir: "pkg/util",
+		},
+		{
+			name:       "partial segment mismatch",
+			importPath: "vanity.com/my-repo-special/pkg",
+			repoURL:    "https://source.developers.google.com/p/project/r/my-repo",
+			wantServer: "source.developers.google.com",
+			wantVCS:    "git",
+			wantDisp:   "https://source.cloud.google.com/project/my-repo https://source.cloud.google.com/project/my-repo/+/main:{dir} https://source.cloud.google.com/project/my-repo/+/main:{dir}/{file}#L{line}",
+			wantSubdir: "",
 		},
 	}
 

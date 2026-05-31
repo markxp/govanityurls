@@ -66,6 +66,33 @@ func TestGithubRegistry(t *testing.T) {
 			wantDisp:   "https://github.com/user/my-repo https://github.com/user/my-repo/tree/main{/dir} https://github.com/user/my-repo/blob/main{/dir}/{file}#L{line}",
 			wantSubdir: "",
 		},
+		{
+			name:       "with subdirectory and .git suffix in repoURL",
+			importPath: "vanity.com/my-repo/pkg/util",
+			repoURL:    "https://github.com/user/my-repo.git",
+			wantServer: "github.com",
+			wantVCS:    "git",
+			wantDisp:   "https://github.com/user/my-repo.git https://github.com/user/my-repo.git/tree/main{/dir} https://github.com/user/my-repo.git/blob/main{/dir}/{file}#L{line}",
+			wantSubdir: "pkg/util",
+		},
+		{
+			name:       "with subdirectory and trailing slash in repoURL",
+			importPath: "vanity.com/my-repo/pkg/util",
+			repoURL:    "https://github.com/user/my-repo/",
+			wantServer: "github.com",
+			wantVCS:    "git",
+			wantDisp:   "https://github.com/user/my-repo/ https://github.com/user/my-repo//tree/main{/dir} https://github.com/user/my-repo//blob/main{/dir}/{file}#L{line}",
+			wantSubdir: "pkg/util",
+		},
+		{
+			name:       "partial segment mismatch",
+			importPath: "vanity.com/my-repo-special/pkg",
+			repoURL:    "https://github.com/user/my-repo",
+			wantServer: "github.com",
+			wantVCS:    "git",
+			wantDisp:   "https://github.com/user/my-repo https://github.com/user/my-repo/tree/main{/dir} https://github.com/user/my-repo/blob/main{/dir}/{file}#L{line}",
+			wantSubdir: "",
+		},
 	}
 
 	for _, tt := range tests {

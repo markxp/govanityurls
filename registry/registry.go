@@ -131,3 +131,34 @@ func (r *mockRegistry) Display(importPath, repo string) string {
 func (r *mockRegistry) Subdir(importPath, repo string) string {
 	return "mock"
 }
+
+// ExtractSubdir extracts the subdirectory of the import path based on the repo URL.
+// It trims trailing slashes from the repo URL and splits both importPath and repo by "/".
+// It finds the last segment of the repo URL (ignoring any ".git" suffix) within the importPath segments,
+// and returns all segments following it as the subdirectory.
+//
+// Examples:
+//   - ExtractSubdir("vanity.com/my-repo/pkg/util", "https://github.com/user/my-repo") -> "pkg/util"
+//   - ExtractSubdir("vanity.com/my-repo/pkg/util", "https://github.com/user/my-repo.git") -> "pkg/util"
+//   - ExtractSubdir("vanity.com/my-repo", "https://github.com/user/my-repo") -> ""
+func ExtractSubdir(importPath, repo string) string {
+	repo = strings.TrimSuffix(repo, "/")
+	parts := strings.Split(repo, "/")
+	if len(parts) < 1 {
+		return ""
+	}
+	repoName := parts[len(parts)-1]
+	repoName = strings.TrimSuffix(repoName, ".git")
+
+	importParts := strings.Split(importPath, "/")
+	for i, part := range importParts {
+		if part == repoName {
+			if i+1 < len(importParts) {
+				return strings.Join(importParts[i+1:], "/")
+			}
+			return ""
+		}
+	}
+	return ""
+}
+

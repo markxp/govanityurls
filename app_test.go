@@ -3,6 +3,7 @@ package govanityurls
 import (
 	"context"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -208,9 +209,7 @@ func TestHandler(t *testing.T) {
 			store := &mockStorage{
 				data: map[string]*storage.RepoConfig{},
 			}
-			for k, v := range test.registered {
-				store.data[k] = v
-			}
+			maps.Copy(store.data, test.registered)
 
 			csrChecker := &mockRepoChecker{repos: test.csrRepos}
 			fallback := &FallbackConfig{
@@ -220,7 +219,7 @@ func TestHandler(t *testing.T) {
 
 			mux := newTestServer(store, fallback, nil, 0)
 			ts := httptest.NewServer(mux)
-			defer ts.Close()
+			t.Cleanup(ts.Close)
 
 			resp, err := http.Get(ts.URL + test.path)
 			if err != nil {
@@ -269,11 +268,11 @@ func findMeta(data []byte, name string) string {
 		return ""
 	}
 	content := string(data)[i+len(tagStart):]
-	j := strings.Index(content, `"`)
-	if j == -1 {
+	before, _, ok := strings.Cut(content, `"`)
+	if !ok {
 		return ""
 	}
-	return content[:j]
+	return before
 }
 
 func TestCacheHeader(t *testing.T) {
@@ -282,7 +281,7 @@ func TestCacheHeader(t *testing.T) {
 	}}
 	mux := newTestServer(store, nil, nil, 300)
 	ts := httptest.NewServer(mux)
-	defer ts.Close()
+	t.Cleanup(ts.Close)
 
 	resp, err := http.Get(ts.URL + "/portmidi")
 	if err != nil {
