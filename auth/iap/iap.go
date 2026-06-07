@@ -1,6 +1,7 @@
-package govanityurls
+package iap
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -9,10 +10,15 @@ import (
 	"cloud.google.com/go/auth/credentials/idtoken"
 )
 
+type slogLimitedLogger interface {
+	LogAttrs(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr)
+}
+
 // IAP validates IAP JWT tokens.
 type IAP struct {
-	audience string
-	logger   slogLimitedLogger
+	audience    string
+	logger      slogLimitedLogger
+	validateJWT func(ctx context.Context, token, audience string) (*idtoken.Payload, error)
 }
 
 // NewIAP creates a new IAP validator with the specified audience and logger.
@@ -21,8 +27,9 @@ func NewIAP(audience string, logger slogLimitedLogger) *IAP {
 		logger = slog.Default()
 	}
 	return &IAP{
-		audience: audience,
-		logger:   logger,
+		audience:    audience,
+		logger:      logger,
+		validateJWT: idtoken.Validate,
 	}
 }
 
@@ -37,7 +44,7 @@ func (iap *IAP) ValidateIAPToken(r *http.Request) (*idtoken.Payload, error) {
 	if iapJWT == "" {
 		return nil, IAPHeaderNotExist
 	}
-	return idtoken.Validate(r.Context(), iapJWT, iap.audience)
+	return iap.validateJWT(r.Context(), iapJWT, iap.audience)
 }
 
 // Middleware returns an HTTP handler that validates the IAP JWT token before forwarding to the next handler.

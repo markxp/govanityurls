@@ -1,0 +1,6 @@
+dispatch:
+  - url: "*/_admin*"
+    service: protected
+
+  - url: "*/_internal*"
+    service: protected

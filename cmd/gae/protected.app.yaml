@@ -1,0 +1,8 @@
+service: protected
+runtime: go126
+instance_class: F1
+
+env_variables:
+  FIRESTORE_COLLECTION: "vanity_urls"
+  # Set IAP_AUDIENCE environment variable appropriately here or in GAE settings.
+  # IAP_AUDIENCE: "projects/PROJECT_NUMBER/apps/PROJECT_ID"
