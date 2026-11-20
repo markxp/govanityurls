@@ -90,18 +90,10 @@ func main() {
 
 	mux := http.NewServeMux()
 
-	// Register public handlers
-	for path, handler := range app.GetPublicHandlers() {
-		mux.Handle(path, handler)
-	}
-
-	// Register private handlers, wrapped in IAP validation middleware.
+	// Register public and IAP-protected private handlers.
 	iapValidator := iap.NewIAP(iapAudience, logger)
 	iapMiddleware := iapValidator.Middleware
-
-	for path, handler := range app.GetPrivateHandlers() {
-		mux.Handle(path, iapMiddleware(handler))
-	}
+	app.RegisterHandlers(mux, govanityurls.WithPrivateMiddleware(iapMiddleware))
 
 	mux.HandleFunc("GET /_ah/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

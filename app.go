@@ -17,18 +17,14 @@ package govanityurls
 import (
 	"context"
 	"fmt"
-	"io"
-	"iter"
 	"log/slog"
-	"maps"
 	"net/http"
 	"strings"
 
-	"encoding/json"
-
 	"github.com/markxp/govanityurls/registry"
 	"github.com/markxp/govanityurls/storage"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // FallbackConfig configures a fallback repository check registry.
@@ -67,7 +63,6 @@ type App struct {
 // The asyncCfg parameter specifies optional configuration for asynchronous registration.
 // The logger parameter specifies the slog limited logger to use.
 func NewApp(host string, cacheMaxAge int, store storage.Storage, fallback *FallbackConfig, registries []registry.Registry, asyncCfg *AsyncRegisterConfig, logger slogLimitedLogger) *App {
-
 	// filter in default values for default config
 	if cacheMaxAge <= 0 {
 		cacheMaxAge = 300 // Default 5 minutes
@@ -97,41 +92,7 @@ func NewApp(host string, cacheMaxAge int, store storage.Storage, fallback *Fallb
 		app.asyncCfg = asyncCfg
 	}
 
-	// func() {
-	// 	if err := app.storage.Close(); err != nil {
-	// 		app.logger.LogAttrs(context.Background(), slog.LevelError, "Failed to close storage", slog.Any("error", err))
-	// 	}
-	// 	if app.asyncCfg != nil {
-	// 		if cloudTasksClient, ok := app.asyncCfg.TaskClient.(*CloudTasksSubmitter); ok {
-	// 			if err := cloudTasksClient.Close(context.TODO()); err != nil {
-	// 				app.logger.LogAttrs(context.Background(), slog.LevelError, "Failed to close task client", slog.Any("error", err))
-	// 			}
-	// 		}
-	// 	}
-	// }()
 	return app
-}
-
-// GetPublicHandlers returns a sequence of public handlers. It returns a string: http.Handler pair. The string is the path of the handler, which has the compatible format for http.ServeMux (Go1.22+).
-func (app *App) GetPublicHandlers() iter.Seq2[string, http.Handler] {
-	m := make(map[string]http.Handler)
-	m["GET /{$}"] = otelhttp.NewHandler(http.HandlerFunc(app.getIndex), "GET /{$}")
-	m["GET /{repoName}"] = otelhttp.NewHandler(http.HandlerFunc(app.getRepo), "GET /{repoName}")
-	m["GET /{repoName}/{path...}"] = otelhttp.NewHandler(http.HandlerFunc(app.getRepo), "GET /{repoName}/{path...}")
-	return maps.All(m)
-}
-
-// GetPrivateHandlers returns a sequence of private handlers. It returns a string: http.Handler pair. The string is the path of the handler, which has the compatible format for http.ServeMux (Go1.22+).
-func (app *App) GetPrivateHandlers() iter.Seq2[string, http.Handler] {
-	m := make(map[string]http.Handler)
-	if app.asyncCfg != nil {
-		m["POST /_internal/registerRepo"] = otelhttp.NewHandler(http.HandlerFunc(app.asyncRegisterRepo), "POST /_internal/registerRepo")
-	}
-	m["POST /_admin"] = otelhttp.NewHandler(http.HandlerFunc(app.postRegisterRepoForm), "POST /_admin")
-	m["GET /_admin"] = otelhttp.NewHandler(http.HandlerFunc(app.getRegisterRepoForm), "GET /_admin")
-	m["GET /_admin/{repoName}"] = otelhttp.NewHandler(http.HandlerFunc(app.getRepoConfig), "GET /_admin/{repoName}")
-	m["GET /_admin/{repoName}/{path...}"] = otelhttp.NewHandler(http.HandlerFunc(app.getRepoConfig), "GET /_admin/{repoName}/{path...}")
-	return maps.All(m)
 }
 
 // RegisterShutdownFunc registers the shutdown operations (e.g., closing storage) to the HTTP server.
@@ -140,13 +101,33 @@ func (app *App) RegisterShutdownFunc(s *http.Server) {
 		if err := app.storage.Close(context.TODO()); err != nil {
 			app.logger.LogAttrs(context.TODO(), slog.LevelError, "Failed to close storage", slog.Any("error", err))
 		}
-		if app.asyncCfg != nil {
-			asyncClient := app.asyncCfg.TaskClient
-			if err := asyncClient.Close(context.TODO()); err != nil {
+		if app.asyncCfg != nil && app.asyncCfg.TaskClient != nil {
+			if err := app.asyncCfg.TaskClient.Close(context.TODO()); err != nil {
 				app.logger.LogAttrs(context.TODO(), slog.LevelError, "Failed to close task client", slog.Any("error", err))
 			}
 		}
 	})
+}
+
+func (app *App) getIndex(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	host := app.derivedHost(r)
+	paths, err := app.storage.ListAll(ctx)
+	if err != nil {
+		app.logger.LogAttrs(ctx, slog.LevelError, "Failed to list paths", slog.Any("error", err))
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	if err := indexTmpl.Execute(w, struct {
+		Host  string
+		Paths []string
+	}{
+		Host:  host,
+		Paths: paths,
+	}); err != nil {
+		http.Error(w, "cannot render the page", http.StatusInternalServerError)
+	}
 }
 
 // getRepo returns an HTML web page to a human or the `go-get` tool.
@@ -158,21 +139,20 @@ func (app *App) RegisterShutdownFunc(s *http.Server) {
 //
 // In this scenario, /a/b/c should return the `go-import` tag pointing to `example.com/a` as a Go module, the VCS, and the address of the source code repository.
 func (app *App) getRepo(w http.ResponseWriter, r *http.Request) {
-	ctx, span := tracer.Start(r.Context(), "getRepo")
-	defer span.End()
-	r = r.WithContext(ctx)
+	ctx := r.Context()
 
-	repoName := r.PathValue("repoName")
-	remainingPath := r.PathValue("path")
+	rawPath := strings.Trim(r.PathValue("path"), "/")
+	if rawPath == "" {
+		http.NotFound(w, r)
+		return
+	}
 
-	// Construct full path segments
-	var fullPathSegments []string
-	if repoName != "" {
-		fullPathSegments = append(fullPathSegments, repoName)
-	}
-	if remainingPath != "" {
-		fullPathSegments = append(fullPathSegments, strings.Split(remainingPath, "/")...)
-	}
+	isGoGet := r.URL.Query().Get("go-get") == "1"
+	span := trace.SpanFromContext(ctx)
+	span.SetAttributes(attrGoGet.Bool(isGoGet))
+
+	fullPathSegments := strings.Split(rawPath, "/")
+	repoName := fullPathSegments[0]
 
 	var config *storage.RepoConfig
 	var err error
@@ -224,6 +204,14 @@ func (app *App) getRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	attrs := []attribute.KeyValue{
+		attrModulePath.String(modulePath),
+	}
+	if subpath != "" {
+		attrs = append(attrs, attrModuleSubpath.String(subpath))
+	}
+	span.SetAttributes(attrs...)
+
 	w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", app.cacheMaxAge))
 	if err := goVanityMetaTagTmpl.Execute(w, struct {
 		Import  string
@@ -240,202 +228,9 @@ func (app *App) getRepo(w http.ResponseWriter, r *http.Request) {
 		Display: config.Display,
 		VCS:     config.VCS,
 		Subdir:  config.Subdir,
-		IsGoGet: r.URL.Query().Get("go-get") == "1",
+		IsGoGet: isGoGet,
 	}); err != nil {
 		app.logger.LogAttrs(ctx, slog.LevelError, "Failed to render vanity page", slog.Any("error", err))
-		http.Error(w, "cannot render the page", http.StatusInternalServerError)
-	}
-}
-
-// registerRepoFormData is the data structure for the admin form to register a new repository.
-type registerRepoFormData struct {
-	Host    string
-	Message string
-	Path    string
-	Repo    string
-	VCS     string
-	Display string
-	Subdir  string
-}
-
-// getRegisterRepoForm renders the admin form to register a new repository.
-func (app *App) getRegisterRepoForm(w http.ResponseWriter, r *http.Request) {
-	if err := registerRepoTmpl.Execute(w, &registerRepoFormData{Host: app.derivedHost(r)}); err != nil {
-		app.logger.LogAttrs(r.Context(), slog.LevelError, "Failed to render: GET /_admin", slog.Any("error", err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-	}
-}
-
-// getRepoConfig renders the admin form with pre-filled values for an existing repository.
-func (app *App) getRepoConfig(w http.ResponseWriter, r *http.Request) {
-	ctx, span := tracer.Start(r.Context(), "getRepoConfig")
-	defer span.End()
-	r = r.WithContext(ctx)
-
-	repoName := r.PathValue("repoName")
-	remainingPath := r.PathValue("path")
-
-	path := repoName
-	if remainingPath != "" {
-		path = repoName + "/" + remainingPath
-	}
-
-	config, err := app.storage.Get(ctx, "/"+path)
-	if err != nil {
-		app.logger.LogAttrs(ctx, slog.LevelError, "Failed to get repo config", slog.Any("error", err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
-	if config == nil {
-		http.NotFound(w, r)
-		return
-	}
-
-	data := &registerRepoFormData{
-		Host:    app.derivedHost(r),
-		Path:    path,
-		Repo:    config.Repo,
-		VCS:     config.VCS,
-		Display: config.Display,
-		Subdir:  config.Subdir,
-	}
-
-	if err := registerRepoTmpl.Execute(w, data); err != nil {
-		app.logger.LogAttrs(r.Context(), slog.LevelError, "Failed to render: GET /_admin/"+path, slog.Any("error", err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-	}
-}
-
-// postRegisterRepoForm registers a new repository. It is for the users to hit.
-// If the app has a task client, it will create a task to do the actual "register repo" job asynchronously.
-// Otherwise, it will do the job synchronously.
-func (app *App) postRegisterRepoForm(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "cannot parse form:"+err.Error(), http.StatusBadRequest)
-		return
-	}
-	cr := &registerRepoPayload{
-		Path: r.FormValue("path"),
-		RepoConfig: &storage.RepoConfig{
-			Repo:    r.FormValue("repo"),
-			VCS:     r.FormValue("vcs"),
-			Display: r.FormValue("display"),
-			Subdir:  r.FormValue("subdir"),
-		},
-	}
-
-	if cr.Path == "" {
-		http.Error(w, "path is required", http.StatusBadRequest)
-		return
-	}
-	if !strings.HasPrefix(cr.Path, "/") {
-		cr.Path = "/" + cr.Path
-	}
-	if _, err := app.fixer.Fix(cr.Path, cr.RepoConfig); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	if err := app.doRegisterRepo(r.Context(), cr.Path, cr.RepoConfig); err != nil {
-		app.logger.LogAttrs(r.Context(), slog.LevelError, "Failed to create repo", slog.Any("error", err))
-		http.Error(w, "failed to register the Go module, that's all we know.", http.StatusInternalServerError)
-		return
-	}
-
-	data := &registerRepoFormData{
-		Host:    app.derivedHost(r),
-		Message: "The Go module is registered successfully!",
-	}
-	if err := registerRepoTmpl.Execute(w, data); err != nil {
-		app.logger.LogAttrs(r.Context(), slog.LevelError, "Failed to render admin form", slog.Any("error", err))
-	}
-}
-
-func (app *App) doRegisterRepo(ctx context.Context, path string, rc *storage.RepoConfig) error {
-	ctx, span := tracer.Start(ctx, "doRegisterRepo")
-	defer span.End()
-
-	if app.asyncCfg == nil || app.asyncCfg.TaskClient == nil {
-		return app.storage.Set(ctx, path, rc)
-	}
-
-	// Fires a task to do the actual "create repo" job asynchronously.
-	taskPayload := &WriteConfigPayload{
-		Path:   path,
-		Config: rc,
-	}
-
-	err := app.asyncCfg.TaskClient.CreateTask(ctx, taskPayload)
-	if err == nil {
-		return nil
-	}
-
-	// If task creation fails, log and fallback to sync write.
-	app.logger.LogAttrs(ctx, slog.LevelError, "Failed to create task", slog.Any("error", err))
-	return app.storage.Set(ctx, path, rc)
-}
-
-type registerRepoPayload struct {
-	Path       string              `json:"path"`
-	RepoConfig *storage.RepoConfig `json:"repoConfig"`
-}
-
-// asyncRegisterRepo does the actual "register repo" job asynchronously, triggered by TaskSubmitter.
-func (app *App) asyncRegisterRepo(w http.ResponseWriter, r *http.Request) {
-	ctx, span := tracer.Start(r.Context(), "asyncRegisterRepo")
-	defer span.End()
-	r = r.WithContext(ctx)
-	// decode the json payload and write to the storage.
-	var payload WriteConfigPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		app.logger.LogAttrs(r.Context(), slog.LevelInfo, "Failed to decode payload", slog.Any("error", err))
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
-	}
-
-	if payload.Path == "" || payload.Config == nil {
-		app.logger.LogAttrs(r.Context(), slog.LevelInfo, "Payload path or config is missing", slog.Any("payload", payload))
-		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
-		return
-	}
-
-	if !strings.HasPrefix(payload.Path, "/") {
-		payload.Path = "/" + payload.Path
-	}
-
-	if _, err := app.fixer.Fix(payload.Path, payload.Config); err != nil {
-		http.Error(w, fmt.Sprintf("invalid payload: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	if err := app.storage.Set(ctx, payload.Path, payload.Config); err != nil {
-		app.logger.LogAttrs(ctx, slog.LevelError, "Failed to write config to storage", slog.Any("error", err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusCreated)
-}
-
-func (app *App) getIndex(w http.ResponseWriter, r *http.Request) {
-	ctx, span := tracer.Start(r.Context(), "getIndex")
-	defer span.End()
-	r = r.WithContext(ctx)
-
-	host := app.derivedHost(r)
-	paths, err := app.storage.ListAll(r.Context())
-	if err != nil {
-		app.logger.LogAttrs(r.Context(), slog.LevelError, "Failed to list paths", slog.Any("error", err))
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
-	}
-	if err := indexTmpl.Execute(w, struct {
-		Host  string
-		Paths []string
-	}{
-		Host:  host,
-		Paths: paths,
-	}); err != nil {
 		http.Error(w, "cannot render the page", http.StatusInternalServerError)
 	}
 }
@@ -446,22 +241,4 @@ func (app *App) derivedHost(r *http.Request) string {
 		host = r.Host
 	}
 	return host
-}
-
-func (app *App) clearCache(w http.ResponseWriter, r *http.Request) {
-	ctx, span := tracer.Start(r.Context(), "clearCache")
-	defer span.End()
-	// No need to propagate context here as it just calls Clear() which doesn't take context (or we don't pass it)
-	// Actually Clear() is on *InMemoryCache, let's see.
-
-	var memStore *storage.InMemoryCache
-	var ok bool
-	if memStore, ok = app.storage.(*storage.InMemoryCache); !ok {
-		w.WriteHeader(http.StatusNotImplemented)
-		io.WriteString(w, "cache cannot be cleared or cache is unavailable")
-		return
-	}
-
-	memStore.Clear(ctx)
-	w.WriteHeader(http.StatusNoContent)
 }

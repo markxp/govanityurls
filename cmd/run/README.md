@@ -52,7 +52,43 @@ $ gcloud run deploy SERVICE_NAME_YOU_LIKE \
     --allow-unauthenticated \
     --project ${PROJECT_ID}
 ```
-We must expose the service publicly, or the `go-get` tool cannot fetch the package metadata.
+We must expose the service publicly, or the `go-get` tool cannot fetch the package metadata. IAP is **not** used: `/_admin*` is protected in-app by Google OIDC login, and `/_internal/*` by Cloud Tasks OIDC bearer-token verification.
+
+### 4. (Optional) Enable Asynchronous Registration via Cloud Tasks
+
+Cloud Tasks calls `POST /_internal/registerRepo` with an OIDC token minted for a dedicated service account. The app accepts the request only if the token is Google-signed, its `aud` matches `CLOUD_TASKS_OIDC_AUDIENCE` (default `CLOUD_TASKS_TARGET_URL`), and its `email` equals `CLOUD_TASKS_SERVICE_ACCOUNT`.
+
+```bash
+$ export RUNTIME_SA="your-cloud-run-runtime-sa@${PROJECT_ID}.iam.gserviceaccount.com"
+$ export TASKS_SA="cloud-tasks-invoker@${PROJECT_ID}.iam.gserviceaccount.com"
+$ export QUEUE="register-repo"
+
+# Queue and the identity Cloud Tasks uses to call the service
+$ gcloud tasks queues create ${QUEUE} --location=${REGION} --project=${PROJECT_ID}
+$ gcloud iam service-accounts create cloud-tasks-invoker --project=${PROJECT_ID}
+
+# The Cloud Run runtime SA must be able to enqueue tasks...
+$ gcloud tasks queues add-iam-policy-binding ${QUEUE} \
+    --location=${REGION} \
+    --member="serviceAccount:${RUNTIME_SA}" \
+    --role="roles/cloudtasks.enqueuer" \
+    --project=${PROJECT_ID}
+
+# ...and act as the Cloud Tasks SA to attach its OIDC token to each task.
+$ gcloud iam service-accounts add-iam-policy-binding ${TASKS_SA} \
+    --member="serviceAccount:${RUNTIME_SA}" \
+    --role="roles/iam.serviceAccountUser" \
+    --project=${PROJECT_ID}
+```
+
+Then set `CLOUD_TASKS_QUEUE=projects/${PROJECT_ID}/locations/${REGION}/queues/${QUEUE}`, `CLOUD_TASKS_TARGET_URL=https://go.example.com/_internal/registerRepo`, and `CLOUD_TASKS_SERVICE_ACCOUNT=${TASKS_SA}` on the service.
+
+> [!WARNING]
+> If either binding is missing, `CreateTask` fails and the app falls back to a synchronous Firestore write. Registration still succeeds, so the misconfiguration only shows up as `Failed to create task` errors in Cloud Logging.
+
+**Security Note (`roles/run.invoker` vs. In-App OIDC Verification):**
+- Because public `go get` requires `--allow-unauthenticated` (`allUsers` has `roles/run.invoker`), Cloud Run's IAM ingress layer will **not** block unauthenticated calls to `/_internal/registerRepo`—making in-app OIDC verification (`CLOUD_TASKS_SERVICE_ACCOUNT` + `CLOUD_TASKS_OIDC_AUDIENCE`) essential.
+- Conversely, if `/_internal/registerRepo` is deployed on a restricted Cloud Run service (`--no-allow-unauthenticated`), you must also grant `roles/run.invoker` to `${TASKS_SA}`.
 
 ---
 
@@ -71,8 +107,12 @@ Configure the following environment variables in your Cloud Run service settings
 | `OAUTH_CLIENT_ID` | **Yes** | Google OAuth 2.0 Client ID for OIDC authentication. |
 | `OAUTH_CLIENT_SECRET` | **Yes** | Google OAuth 2.0 Client Secret. |
 | `OAUTH_REDIRECT_URL` | **Yes** | Authorized redirect URI (e.g., `https://go.example.com/_admin/callback`). |
-| `OAUTH_STATE_SECRET` | No | Signer key for OAuth states. Generates randomly if unset (unsuitable for multi-instance). |
+| `OAUTH_STATE_SECRET` | **Yes** | Shared key (≥ 32 bytes) for signing the OAuth `state` cookie. Must be identical on every instance, because `/_admin/login` and `/_admin/callback` may hit different instances. Store it in Secret Manager. |
 | `ALLOWED_EMAILS` | No | Comma-separated list of user emails allowed to log in. |
 | `ALLOWED_DOMAINS` | No | Comma-separated list of email domains allowed to log in. |
+| `CLOUD_TASKS_QUEUE` | No | Full Cloud Tasks queue path (`projects/.../locations/.../queues/...`) to enable async `/_internal/registerRepo`. |
+| `CLOUD_TASKS_TARGET_URL` | Conditional | Required if `CLOUD_TASKS_QUEUE` is set. Target URL for `/_internal/registerRepo`. |
+| `CLOUD_TASKS_SERVICE_ACCOUNT` | Conditional | Required if `CLOUD_TASKS_QUEUE` is set. Service account email used by Cloud Tasks to mint OIDC tokens and verified on `/_internal/*`. |
+| `CLOUD_TASKS_OIDC_AUDIENCE` | No | Expected OIDC `aud` claim for `/_internal/*` (defaults to `CLOUD_TASKS_TARGET_URL`). |
 
 Do not forget to allow emails or domains (authorization). Otherwise, no one can access the admin console, even if they authenticate themselves with correct OIDC token.

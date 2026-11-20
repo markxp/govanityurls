@@ -17,8 +17,10 @@ import (
 	"testing"
 	"time"
 
+	"cloud.google.com/go/auth/credentials/idtoken"
 	"github.com/markxp/govanityurls"
 	oo "github.com/markxp/govanityurls/auth/oauth2"
+	"github.com/markxp/govanityurls/auth/oidc"
 	"github.com/markxp/govanityurls/storage"
 	"golang.org/x/oauth2"
 )
@@ -132,20 +134,7 @@ func TestCloudRunSetupApp(t *testing.T) {
 	app := govanityurls.NewApp("example.com", 300, store, nil, nil, nil, logger)
 
 	mux := http.NewServeMux()
-
-	// Register public handlers
-	for path, handler := range app.GetPublicHandlers() {
-		mux.Handle(path, handler)
-	}
-
-	// Mount login and callback handlers explicitly on the mux
-	mux.Handle("GET /_admin/login", loginHandler)
-	mux.Handle("GET /_admin/callback", callbackHandler)
-
-	// Register private handlers on the mux, wrapping them with the auth middleware
-	for path, handler := range app.GetPrivateHandlers() {
-		mux.Handle(path, authMiddleware(handler))
-	}
+	registerRoutes(mux, app, authMiddleware, loginHandler, callbackHandler, nil)
 
 	handler := mux
 
@@ -247,9 +236,10 @@ func TestMainE2E(t *testing.T) {
 		"OAUTH_CLIENT_ID=test-client-id",
 		"OAUTH_CLIENT_SECRET=test-client-secret",
 		"OAUTH_REDIRECT_URL=http://localhost:"+fmt.Sprintf("%d", serverPort)+"/_admin/callback",
+		"ALLOWED_DOMAINS=example.com",
 		"PORT="+fmt.Sprintf("%d", serverPort),
 		"HEALTH_PORT="+fmt.Sprintf("%d", healthPort),
-		"OAUTH_STATE_SECRET=test-secret-key-32-bytes-long-!",
+		"OAUTH_STATE_SECRET=test-secret-key-at-least-32-bytes-long",
 	)
 
 	var stdout, stderr bytes.Buffer
@@ -347,4 +337,245 @@ func waitForPort(host string, timeout time.Duration) bool {
 		time.Sleep(100 * time.Millisecond)
 	}
 	return false
+}
+
+type mockTaskSubmitter struct{}
+
+func (m *mockTaskSubmitter) CreateTask(ctx context.Context, payload *govanityurls.WriteConfigPayload) error {
+	return nil
+}
+
+func (m *mockTaskSubmitter) Close(ctx context.Context) error { return nil }
+
+func TestCloudRunInternalOIDCRouting(t *testing.T) {
+	store := &mockStorage{data: map[string]*storage.RepoConfig{}}
+	logger := slog.Default()
+	oauthConfig := &oauth2.Config{ClientID: "test-client-id"}
+	stateSecret := []byte("test-secret-key-32-bytes-long-!")
+
+	authMiddleware, loginHandler, callbackHandler := oo.New(
+		oauthConfig,
+		stateSecret,
+		"/_admin/login",
+		"/_admin",
+		oo.WithAllowedEmails([]string{"admin@example.com"}),
+		oo.WithLogger(logger),
+		// Mirrors idtoken.Validate: the token is only valid for the audience it was minted for.
+		oo.WithJWTValidator(func(ctx context.Context, token, audience string) (*oo.Payload, error) {
+			if token == "valid-admin-token" && audience == oauthConfig.ClientID {
+				return &oo.Payload{
+					Subject: "admin",
+					Claims:  map[string]any{"email": "admin@example.com", "email_verified": true},
+				}, nil
+			}
+			return nil, errors.New("invalid admin token or audience mismatch")
+		}),
+	)
+
+	const taskSA = "cloud-tasks@my-project.iam.gserviceaccount.com"
+	const targetAudience = "https://go.example.com/_internal/registerRepo"
+
+	oidcValidator := oidc.NewValidator(
+		targetAudience,
+		[]string{taskSA},
+		oidc.WithLogger(logger),
+		oidc.WithJWTValidator(func(ctx context.Context, token, audience string) (*idtoken.Payload, error) {
+			if token == "valid-tasks-oidc" && audience == targetAudience {
+				return &idtoken.Payload{
+					Issuer:   "https://accounts.google.com",
+					Audience: audience,
+					Claims: map[string]any{
+						"email":          taskSA,
+						"email_verified": true,
+					},
+				}, nil
+			}
+			return nil, errors.New("invalid oidc token")
+		}),
+	)
+
+	asyncCfg := &govanityurls.AsyncRegisterConfig{
+		TaskClient:               &mockTaskSubmitter{},
+		TaskClientServiceAccount: taskSA,
+	}
+	app := govanityurls.NewApp("example.com", 300, store, nil, nil, asyncCfg, logger)
+	mux := http.NewServeMux()
+	registerRoutes(mux, app, authMiddleware, loginHandler, callbackHandler, oidcValidator.Middleware)
+
+	t.Run("Internal endpoint rejects unauthenticated request with 401", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/_internal/registerRepo", strings.NewReader(`{"path":"/pkg","config":{"repo":"https://github.com/u/pkg","vcs":"git"}}`))
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("expected 401 Unauthorized, got %d", w.Code)
+		}
+	})
+
+	t.Run("Internal endpoint rejects invalid OIDC token with 401", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/_internal/registerRepo", strings.NewReader(`{"path":"/pkg","config":{"repo":"https://github.com/u/pkg","vcs":"git"}}`))
+		req.Header.Set("Authorization", "Bearer wrong-token")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("expected 401 Unauthorized, got %d", w.Code)
+		}
+	})
+
+	t.Run("Internal endpoint accepts valid Cloud Tasks OIDC token", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/_internal/registerRepo", strings.NewReader(`{"path":"/pkg","config":{"repo":"https://github.com/u/pkg","vcs":"git","display":"https://github.com/u/pkg https://github.com/u/pkg/tree/main{/dir} https://github.com/u/pkg/blob/main{/dir}/{file}#L{line}"}}`))
+		req.Header.Set("Authorization", "Bearer valid-tasks-oidc")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusCreated {
+			t.Errorf("expected 201 Created, got %d: %s", w.Code, w.Body.String())
+		}
+		if store.data["/pkg"] == nil {
+			t.Errorf("expected /pkg to be saved in storage")
+		}
+	})
+
+	t.Run("Admin token is rejected on internal endpoint", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/_internal/registerRepo", strings.NewReader(`{}`))
+		req.Header.Set("Authorization", "Bearer valid-admin-token")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("expected 401 Unauthorized, got %d", w.Code)
+		}
+	})
+
+	t.Run("Admin session cookie is rejected on internal endpoint", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/_internal/registerRepo", strings.NewReader(`{}`))
+		req.AddCookie(&http.Cookie{Name: "session", Value: "valid-admin-token"})
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("expected 401 Unauthorized, got %d", w.Code)
+		}
+	})
+
+	t.Run("Cloud Tasks token is rejected on admin endpoint", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/_admin", nil)
+		req.Header.Set("Authorization", "Bearer valid-tasks-oidc")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("expected 401 Unauthorized, got %d", w.Code)
+		}
+	})
+
+	t.Run("Admin token is accepted on admin endpoint", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/_admin", nil)
+		req.Header.Set("Authorization", "Bearer valid-admin-token")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("expected 200 OK, got %d", w.Code)
+		}
+	})
+}
+
+func TestRegisterRoutesFailsClosedWithoutInternalMiddleware(t *testing.T) {
+	store := &mockStorage{data: map[string]*storage.RepoConfig{}}
+	asyncCfg := &govanityurls.AsyncRegisterConfig{TaskClient: &mockTaskSubmitter{}}
+	app := govanityurls.NewApp("example.com", 300, store, nil, nil, asyncCfg, slog.Default())
+	noop := func(h http.Handler) http.Handler { return h }
+
+	defer func() {
+		if recover() == nil {
+			t.Error("expected registerRoutes to panic when internal handlers exist without internalMiddleware")
+		}
+	}()
+	registerRoutes(http.NewServeMux(), app, noop, http.NotFoundHandler(), http.NotFoundHandler(), nil)
+}
+
+func TestValidateAuthConfig(t *testing.T) {
+	const validSecret = "test-secret-key-at-least-32-bytes-long"
+
+	tests := []struct {
+		name           string
+		clientID       string
+		clientSecret   string
+		redirectURL    string
+		stateSecret    string
+		allowedEmails  []string
+		allowedDomains []string
+		wantErr        bool
+	}{
+		{
+			name:          "valid with allowedEmails",
+			clientID:      "cid",
+			clientSecret:  "csecret",
+			redirectURL:   "https://go.example.com/_admin/callback",
+			stateSecret:   validSecret,
+			allowedEmails: []string{"admin@example.com"},
+			wantErr:       false,
+		},
+		{
+			name:           "valid with allowedDomains",
+			clientID:       "cid",
+			clientSecret:   "csecret",
+			redirectURL:    "https://go.example.com/_admin/callback",
+			stateSecret:    validSecret,
+			allowedDomains: []string{"example.com"},
+			wantErr:        false,
+		},
+		{
+			name:          "missing clientID",
+			clientSecret:  "csecret",
+			redirectURL:   "https://go.example.com/_admin/callback",
+			stateSecret:   validSecret,
+			allowedEmails: []string{"admin@example.com"},
+			wantErr:       true,
+		},
+		{
+			name:          "missing clientSecret",
+			clientID:      "cid",
+			redirectURL:   "https://go.example.com/_admin/callback",
+			stateSecret:   validSecret,
+			allowedEmails: []string{"admin@example.com"},
+			wantErr:       true,
+		},
+		{
+			name:          "missing redirectURL",
+			clientID:      "cid",
+			clientSecret:  "csecret",
+			stateSecret:   validSecret,
+			allowedEmails: []string{"admin@example.com"},
+			wantErr:       true,
+		},
+		{
+			name:          "short stateSecret (< 32 bytes)",
+			clientID:      "cid",
+			clientSecret:  "csecret",
+			redirectURL:   "https://go.example.com/_admin/callback",
+			stateSecret:   "too-short",
+			allowedEmails: []string{"admin@example.com"},
+			wantErr:       true,
+		},
+		{
+			name:         "missing both allowedEmails and allowedDomains fails closed",
+			clientID:     "cid",
+			clientSecret: "csecret",
+			redirectURL:  "https://go.example.com/_admin/callback",
+			stateSecret:  validSecret,
+			wantErr:      true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateAuthConfig(tc.clientID, tc.clientSecret, tc.redirectURL, tc.stateSecret, tc.allowedEmails, tc.allowedDomains)
+			if (err != nil) != tc.wantErr {
+				t.Errorf("validateAuthConfig() error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
 }

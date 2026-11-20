@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -14,10 +14,12 @@ import (
 	"syscall"
 	"time"
 
+	cloudtasks "cloud.google.com/go/cloudtasks/apiv2"
 	"cloud.google.com/go/firestore"
 	"github.com/markxp/govanityurls"
 	oo "github.com/markxp/govanityurls/auth/oauth2"
 	"github.com/markxp/govanityurls/auth/oauth2/google"
+	"github.com/markxp/govanityurls/auth/oidc"
 	"github.com/markxp/govanityurls/storage"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/oauth2"
@@ -82,14 +84,9 @@ func main() {
 		}
 	}
 
-	clientID := os.Getenv("OAUTH_CLIENT_ID")
-	clientSecret := os.Getenv("OAUTH_CLIENT_SECRET")
-	redirectURL := os.Getenv("OAUTH_REDIRECT_URL")
-
-	if clientID == "" {
-		slog.Error("OAUTH_CLIENT_ID environment variable is not set")
-		os.Exit(1)
-	}
+	clientID := strings.TrimSpace(os.Getenv("OAUTH_CLIENT_ID"))
+	clientSecret := strings.TrimSpace(os.Getenv("OAUTH_CLIENT_SECRET"))
+	redirectURL := strings.TrimSpace(os.Getenv("OAUTH_REDIRECT_URL"))
 
 	// auth: we use OIDC
 
@@ -115,19 +112,15 @@ func main() {
 		}
 	}
 
-	// 3. prepare the magic secret for state signing
+	// 3. prepare the shared secret for OAuth state signing.
+	// Required: Cloud Run scales horizontally, and /_admin/login and /_admin/callback
+	// may land on different instances, so every instance must share the same key.
 	stateSecretStr := os.Getenv("OAUTH_STATE_SECRET")
-	var stateSecret []byte
-	if stateSecretStr != "" {
-		stateSecret = []byte(stateSecretStr)
-	} else {
-		slog.Warn("OAUTH_STATE_SECRET is not set. Generating a random key for OAuth state signatures. Note that state verification will fail across restarts or multi-instance deployments.")
-		stateSecret = make([]byte, 32)
-		if _, err := rand.Read(stateSecret); err != nil {
-			slog.Error("Failed to generate random state secret", slog.Any("error", err))
-			os.Exit(1)
-		}
+	if err := validateAuthConfig(clientID, clientSecret, redirectURL, stateSecretStr, allowedEmails, allowedDomains); err != nil {
+		slog.Error("Invalid OAuth/authorization configuration", slog.Any("error", err))
+		os.Exit(1)
 	}
+	stateSecret := []byte(stateSecretStr)
 
 	// 4. Create a single auth middleware
 	// 4.1 prepare the options for the auth middleware
@@ -140,24 +133,39 @@ func main() {
 	// 4.2 prepare the auth middleware with `login` path, `defaultLandingPath` path for staring and ending of the oauth2 flow.
 	authMiddleware, loginHandler, callbackHandler := oo.New(oauthConfig, stateSecret, "/_admin/login", "/_admin", opts...)
 
-	app := govanityurls.NewApp(vanityHost, cacheMaxAgeSec, store, nil, nil, nil, logger)
+	// 5. Optional Cloud Tasks async registration + OIDC bearer-token verification for /_internal/*
+	var asyncCfg *govanityurls.AsyncRegisterConfig
+	var internalMiddleware func(http.Handler) http.Handler
+	if queuePath := strings.TrimSpace(os.Getenv("CLOUD_TASKS_QUEUE")); queuePath != "" {
+		targetURL := strings.TrimSpace(os.Getenv("CLOUD_TASKS_TARGET_URL"))
+		taskSA := strings.TrimSpace(os.Getenv("CLOUD_TASKS_SERVICE_ACCOUNT"))
+		if targetURL == "" || taskSA == "" {
+			slog.Error("CLOUD_TASKS_TARGET_URL and CLOUD_TASKS_SERVICE_ACCOUNT must be set when CLOUD_TASKS_QUEUE is configured")
+			os.Exit(1)
+		}
+		audience := strings.TrimSpace(os.Getenv("CLOUD_TASKS_OIDC_AUDIENCE"))
+		if audience == "" {
+			audience = targetURL
+		}
 
-	// use these handlers, middlewares as is.
+		tasksClient, err := cloudtasks.NewClient(ctx)
+		if err != nil {
+			slog.Error("Failed to initialize Cloud Tasks client", slog.Any("error", err))
+			os.Exit(1)
+		}
+		submitter := govanityurls.NewCloudTasksSubmitter(tasksClient, queuePath, targetURL, taskSA, govanityurls.WithAudience(audience))
+		asyncCfg = &govanityurls.AsyncRegisterConfig{
+			TaskClient:               submitter,
+			TaskClientServiceAccount: taskSA,
+		}
+		oidcValidator := oidc.NewValidator(audience, []string{taskSA}, oidc.WithLogger(logger))
+		internalMiddleware = oidcValidator.Middleware
+	}
+
+	app := govanityurls.NewApp(vanityHost, cacheMaxAgeSec, store, nil, nil, asyncCfg, logger)
+
 	mux := http.NewServeMux()
-
-	// Register public handlers
-	for path, handler := range app.GetPublicHandlers() {
-		mux.Handle(path, handler)
-	}
-
-	// Mount login and callback handlers explicitly on the mux
-	mux.Handle("GET /_admin/login", loginHandler)
-	mux.Handle("GET /_admin/callback", callbackHandler)
-
-	// Register private handlers on the mux, wrapping them with the auth middleware
-	for path, handler := range app.GetPrivateHandlers() {
-		mux.Handle(path, authMiddleware(handler))
-	}
+	registerRoutes(mux, app, authMiddleware, loginHandler, callbackHandler, internalMiddleware)
 
 	handler := mux
 
@@ -225,4 +233,45 @@ func main() {
 	}
 
 	slog.Info("Server stopped")
+}
+
+func registerRoutes(
+	mux *http.ServeMux,
+	app *govanityurls.App,
+	authMiddleware func(http.Handler) http.Handler,
+	loginHandler http.Handler,
+	callbackHandler http.Handler,
+	internalMiddleware func(http.Handler) http.Handler,
+) {
+	// OAuth2 login and callback handlers
+	mux.Handle("GET /_admin/login", loginHandler)
+	mux.Handle("GET /_admin/callback", callbackHandler)
+
+	opts := []govanityurls.HandlerOption{
+		govanityurls.WithAdminMiddleware(authMiddleware),
+	}
+	if internalMiddleware != nil {
+		opts = append(opts, govanityurls.WithInternalMiddleware(internalMiddleware))
+	}
+
+	app.RegisterHandlers(mux, opts...)
+}
+
+func validateAuthConfig(clientID, clientSecret, redirectURL, stateSecret string, allowedEmails, allowedDomains []string) error {
+	if clientID == "" {
+		return errors.New("OAUTH_CLIENT_ID environment variable is not set")
+	}
+	if clientSecret == "" {
+		return errors.New("OAUTH_CLIENT_SECRET environment variable is not set")
+	}
+	if redirectURL == "" {
+		return errors.New("OAUTH_REDIRECT_URL environment variable is not set")
+	}
+	if len(stateSecret) < 32 {
+		return errors.New("OAUTH_STATE_SECRET must be set to at least 32 bytes (shared across all instances)")
+	}
+	if len(allowedEmails) == 0 && len(allowedDomains) == 0 {
+		return errors.New("at least one of ALLOWED_EMAILS or ALLOWED_DOMAINS must be configured")
+	}
+	return nil
 }
